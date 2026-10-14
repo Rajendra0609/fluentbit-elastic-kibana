@@ -41,7 +41,7 @@ single home-lab node.
 - About **4 GB of free RAM** on the node: Elasticsearch takes up to 2 GB, Kibana 1 GB, and Fluent Bit 512 MB.
 - A default StorageClass. On k3s this is `local-path`. Check with `kubectl get storageclass`.
 - `openssl` and `curl` on the machine you run the commands from.
-- Node sysctl: the Elasticsearch init container sets `vm.max_map_count` automatically. If your nodes forbid privileged init containers, set it on the host instead: `sudo sysctl -w vm.max_map_count=262144`.
+- **`vm.max_map_count` on every node.** Elasticsearch needs `262144`. Set it on each node, because the pod can be scheduled anywhere: `sudo sysctl -w vm.max_map_count=262144`, and persist it with `echo "vm.max_map_count=262144" | sudo tee /etc/sysctl.d/99-elasticsearch.conf`.
 
 ## Changes you might need
 
@@ -178,7 +178,7 @@ These exercises teach the most. Each one shows a failure mode you will meet in p
 
 | Symptom | Likely cause | Check |
 |---|---|---|
-| `elasticsearch-0` crashes with "max virtual memory areas" | `vm.max_map_count` too low | `sysctl vm.max_map_count`, and the init container's logs |
+| `elasticsearch-0` crashes with "max virtual memory areas" | `vm.max_map_count` too low on that node | Run `sysctl vm.max_map_count` on every node (see Prerequisites) |
 | `elasticsearch-0` is `Pending` | No default StorageClass, or the PVC can't bind | `kubectl -n logging get pvc`, `kubectl get storageclass` |
 | Kibana logs "Unable to authenticate user kibana_system" | The setup job has not run yet, or the job failed | `kubectl -n logging logs job/es-setup` |
 | `es-setup` keeps restarting | Elasticsearch not ready yet, which is normal for the first few minutes | `kubectl -n logging logs job/es-setup --tail=20` |

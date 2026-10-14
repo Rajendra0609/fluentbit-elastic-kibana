@@ -25,10 +25,12 @@ data:
     # api METHOD PATH [JSON_BODY]  -> prints response, fails on HTTP >= 400
     api() {
       method="$1"; path="$2"; body="${3:-}"
+      # "|| return 1" is essential. Without it the function returns the status of
+      # the final echo, which is always 0, so the wait loop below never waits.
       if [ -n "$body" ]; then
-        curl -fsS -u "$AUTH" -H 'Content-Type: application/json' -X "$method" "$ES$path" -d "$body"
+        curl -fsS -u "$AUTH" -H 'Content-Type: application/json' -X "$method" "$ES$path" -d "$body" || return 1
       else
-        curl -fsS -u "$AUTH" -X "$method" "$ES$path"
+        curl -fsS -u "$AUTH" -X "$method" "$ES$path" || return 1
       fi
       echo
     }
