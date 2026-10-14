@@ -1,0 +1,50 @@
+# A test workload that writes one JSON log line per second. Use it to watch logs
+# arrive in Kibana in real time. It runs in its own namespace so you can filter it.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: log-generator
+  namespace: demo
+  labels:
+    app: log-generator
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: log-generator
+  template:
+    metadata:
+      labels:
+        app: log-generator
+        team: platform
+    spec:
+      containers:
+        - name: generator
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              i=0
+              while true; do
+                i=$((i+1))
+                case $((i % 10)) in
+                  0) lvl=error ;;
+                  3) lvl=warn ;;
+                  *) lvl=info ;;
+                esac
+                echo "{\"level\":\"$lvl\",\"msg\":\"order processed\",\"order_id\":$i,\"pod\":\"$HOSTNAME\"}"
+                sleep 1
+              done
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi

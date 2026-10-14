@@ -1,0 +1,123 @@
+# One-time bootstrap for Elasticsearch security and retention.
+#
+# This Job does what a production team normally does with Terraform or an Ansible
+# playbook. It:
+#   1. sets the kibana_system password Kibana logs in with
+#   2. creates a least-privilege role and user for Fluent Bit (write to k8s-logs-* only)
+#   3. creates an ILM policy that deletes indices after 7 days
+#   4. creates an index template that applies the policy to every k8s-logs-* index
+#
+# The Job is idempotent, so re-running it is safe. To re-run it, delete it first:
+#   kubectl -n logging delete job es-setup
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: es-setup-script
+  namespace: logging
+data:
+  setup.sh: |
+    #!/bin/sh
+    set -eu
+
+    ES="http://elasticsearch.logging.svc.cluster.local:9200"
+    AUTH="elastic:${ELASTIC_PASSWORD}"
+
+    # api METHOD PATH [JSON_BODY]  -> prints response, fails on HTTP >= 400
+    api() {
+      method="$1"; path="$2"; body="${3:-}"
+      if [ -n "$body" ]; then
+        curl -fsS -u "$AUTH" -H 'Content-Type: application/json' -X "$method" "$ES$path" -d "$body"
+      else
+        curl -fsS -u "$AUTH" -X "$method" "$ES$path"
+      fi
+      echo
+    }
+
+    echo "==> waiting for Elasticsearch"
+    until api GET "/_cluster/health?wait_for_status=yellow&timeout=10s" >/dev/null 2>&1; do
+      sleep 5
+    done
+    echo "==> Elasticsearch is reachable"
+
+    echo "==> setting kibana_system password"
+    api POST "/_security/user/kibana_system/_password" \
+      "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}" >/dev/null
+
+    echo "==> creating role fluent-bit-writer (write access to k8s-logs-* only)"
+    api PUT "/_security/role/fluent-bit-writer" '{
+      "cluster": ["monitor"],
+      "indices": [{
+        "names": ["k8s-logs-*"],
+        "privileges": ["create_index", "create", "write", "auto_configure"]
+      }]
+    }' >/dev/null
+
+    echo "==> creating user fluent-bit"
+    api PUT "/_security/user/fluent-bit" \
+      "{\"password\":\"${FLUENT_BIT_PASSWORD}\",\"roles\":[\"fluent-bit-writer\"],\"full_name\":\"Fluent Bit log collector\"}" >/dev/null
+
+    echo "==> creating ILM policy k8s-logs-retention (delete after 7 days)"
+    api PUT "/_ilm/policy/k8s-logs-retention" '{
+      "policy": {"phases": {"delete": {"min_age": "7d", "actions": {"delete": {}}}}}
+    }' >/dev/null
+
+    echo "==> creating index template for k8s-logs-*"
+    api PUT "/_index_template/k8s-logs" '{
+      "index_patterns": ["k8s-logs-*"],
+      "priority": 100,
+      "template": {
+        "settings": {
+          "number_of_shards": 1,
+          "number_of_replicas": 0,
+          "refresh_interval": "1s",
+          "index.lifecycle.name": "k8s-logs-retention"
+        }
+      }
+    }' >/dev/null
+
+    echo "==> setup complete"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: es-setup
+  namespace: logging
+spec:
+  # Retries until Elasticsearch is ready, so ordering between manifests does not matter.
+  backoffLimit: 30
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: setup
+          image: curlimages/curl:8.10.1
+          command: ["/bin/sh", "/scripts/setup.sh"]
+          env:
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: logging-credentials
+                  key: ELASTIC_PASSWORD
+            - name: KIBANA_SYSTEM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: logging-credentials
+                  key: KIBANA_SYSTEM_PASSWORD
+            - name: FLUENT_BIT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: logging-credentials
+                  key: FLUENT_BIT_PASSWORD
+          volumeMounts:
+            - name: script
+              mountPath: /scripts
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: script
+          configMap:
+            name: es-setup-script
+            defaultMode: 0755

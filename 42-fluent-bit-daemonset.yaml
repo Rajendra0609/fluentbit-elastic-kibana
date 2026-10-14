@@ -1,0 +1,91 @@
+# Fluent Bit runs as a DaemonSet, so exactly one agent runs on every node and reads
+# that node's container logs. This is the standard pattern for node-level collection.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: fluent-bit
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluent-bit
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: fluent-bit
+  updateStrategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: fluent-bit
+      annotations:
+        # Changes to the config trigger a rolling restart when the ConfigMap is re-applied.
+        checksum/config-hash: "fluent-bit-config-v1"
+    spec:
+      serviceAccountName: fluent-bit
+      # Collect logs from control-plane nodes too. Single-node labs have only that node.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: node-role.kubernetes.io/master
+          operator: Exists
+          effect: NoSchedule
+      # Must run as root to read /var/log/pods, which is root-owned.
+      securityContext:
+        runAsUser: 0
+      containers:
+        - name: fluent-bit
+          image: fluent/fluent-bit:3.1.9
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http-metrics
+              containerPort: 2020
+          env:
+            - name: FLUENT_BIT_ES_USER
+              value: fluent-bit
+            - name: FLUENT_BIT_ES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: logging-credentials
+                  key: FLUENT_BIT_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: 2020
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: varlog
+              mountPath: /var/log
+              readOnly: true
+            - name: config
+              mountPath: /fluent-bit/etc/
+              readOnly: true
+            - name: state
+              mountPath: /var/lib/fluent-bit
+      volumes:
+        - name: varlog
+          hostPath:
+            path: /var/log
+        - name: config
+          configMap:
+            name: fluent-bit-config
+        # Position database and disk buffer. They live on the host, so a pod restart
+        # resumes where it stopped and does not lose buffered logs.
+        - name: state
+          hostPath:
+            path: /var/lib/fluent-bit
+            type: DirectoryOrCreate

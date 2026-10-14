@@ -1,0 +1,39 @@
+# Monitoring integration for the EXISTING Prometheus in your prod-observability repo.
+# This is not part of the logging kustomization. Copy the pieces below into:
+#   - scrape_configs in argocd/apps/20-configmap.yaml   (prometheus.yml)
+#   - a new group in argocd/apps/20-alert-rules-configmap.yaml   (alerts.yml)
+#
+# Fluent Bit exposes its own pipeline metrics on port 2020:
+#   fluentbit_input_records_total   lines read from container logs
+#   fluentbit_output_proc_records_total   records accepted by Elasticsearch
+#   fluentbit_output_errors_total   failed sends (this is what the alert watches)
+---
+# 1) scrape job (prometheus.yml)
+- job_name: fluent-bit
+  metrics_path: /api/v1/metrics/prometheus
+  kubernetes_sd_configs:
+    - role: pod
+  relabel_configs:
+    - source_labels: [__meta_kubernetes_namespace]
+      action: keep
+      regex: logging
+    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+      action: keep
+      regex: fluent-bit
+    - source_labels: [__meta_kubernetes_pod_container_port_name]
+      action: keep
+      regex: http-metrics
+---
+# 2) alert rule group (alerts.yml). Logs silently lost is serious, so this is critical
+#    and therefore also goes to email, through your existing critical-notifications receiver.
+groups:
+  - name: logging-alerts
+    rules:
+      - alert: FluentBitOutputErrors
+        expr: sum by (instance) (rate(fluentbit_output_errors_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fluent Bit cannot deliver logs to Elasticsearch on {{ $labels.instance }}"
+          description: "Fluent Bit is failing to send logs to Elasticsearch. Check the fluent-bit and elasticsearch pods. Buffered logs on disk will be resent when delivery recovers."
