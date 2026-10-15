@@ -53,7 +53,7 @@ data:
     # Kubernetes writes each container's stdout/stderr to
     # /var/log/containers/<pod>_<namespace>_<container>-<id>.log, a symlink into
     # /var/log/pods. The /var/log mount in the DaemonSet covers both.
-    # Two line formats are handled: Docker JSON (older runtimes) and containerd CRI.
+    # Lines are read in the CRI format that containerd and CRI-O write.
     # ---------------------------------------------------------------------------
     <source>
       @type tail
@@ -74,20 +74,13 @@ data:
       pos_file /var/lib/fluentd/containers.log.pos
       pos_file_compaction_interval 24h
       <parse>
-        @type multi_format
-        # Docker JSON file format: one JSON object per line.
-        <pattern>
-          format json
-          time_key time
-          time_format %Y-%m-%dT%H:%M:%S.%NZ
-        </pattern>
-        # containerd CRI format: <time> <stdout|stderr> <F|P> <message>
-        # P marks a partial line; see README "Known differences" for how it is handled.
-        <pattern>
-          format regexp
-          expression /^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[FP]) (?<log>.*)$/
-          time_format %Y-%m-%dT%H:%M:%S.%N%:z
-        </pattern>
+        # CRI format, written by containerd and CRI-O on every Kubernetes 1.24+ cluster:
+        #   <time> <stdout|stderr> <F|P> <message>
+        # P marks a partial line; see README "Known differences". This is a core parser.
+        # The Docker JSON format needs the multi_format gem, so it is not supported.
+        @type regexp
+        expression /^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[FP]) (?<log>.*)$/
+        time_format %Y-%m-%dT%H:%M:%S.%N%:z
       </parse>
     </source>
 

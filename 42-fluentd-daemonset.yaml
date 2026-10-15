@@ -25,7 +25,7 @@ spec:
       annotations:
         # Kubernetes does not restart pods when a ConfigMap changes. Bump this value when
         # you change 41-fluentd-config.yaml, so the pod template changes and pods roll.
-        checksum/config-hash: "fluentd-config-v1"
+        checksum/config-hash: "fluentd-config-v2"
     spec:
       serviceAccountName: fluentd
       # Collect logs from control-plane nodes too. Single-node labs have only that node.
@@ -41,12 +41,18 @@ spec:
         runAsUser: 0
       containers:
         - name: fluentd
-          image: fluentd-logging:1.19.4
+          image: daggu1997/fluentd:v1.0
           imagePullPolicy: IfNotPresent
           ports:
             - name: http-metrics
               containerPort: 24231
           env:
+            # Used by kubernetes_metadata to watch only pods on this node. Without it the
+            # filter warns and watches every pod in the cluster.
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
             - name: FLUENTD_ES_USER
               value: fluentd
             - name: FLUENTD_ES_PASSWORD
