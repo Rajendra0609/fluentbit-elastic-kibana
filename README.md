@@ -60,6 +60,7 @@ fills, which matches what the old comments promised.
 | `50-log-generator.yaml` | Namespace, Deployment | Test app that writes JSON logs every second, so you can watch them arrive |
 | `image/Dockerfile` | Dockerfile | Official Fluentd 1.19.4 plus the Elasticsearch, Kubernetes metadata and Prometheus plugins |
 | `image/build.sh` | script | Builds the image, then imports it into k3s or pushes it to a registry |
+| `kibana/` | scripts, generated objects | Five Kibana dashboards, live-feed searches, and four alert rules. See `kibana/README.md` |
 | `monitoring/prometheus-fluentd.yaml` | snippet | Scrape job and alert for your existing Prometheus. Not applied by kustomize |
 | `kustomization.yaml` | Kustomization | Lists everything to apply, and pins the Fluentd image tag |
 | `deploy.sh` | script | Runs everything in order and waits for each step |
@@ -351,6 +352,20 @@ TLS, upgrades, and scaling for you. Once this lab makes sense, that is the logic
 
 Now a Fluentd delivery failure goes to Alertmanager, then to Slack and email. That is the same
 path your pod alerts use.
+
+## Dashboards and alerts
+
+Once the stack is running, import the monitoring views and alert rules. Details are in `kibana/README.md`:
+
+```bash
+kubectl -n logging port-forward svc/kibana 5601:5601 &
+cd kibana
+./import-dashboards.sh        # five dashboards: overview, errors, pod drill-down, pipeline health, logging stack
+python3 create-alerts.py      # error spike, warning spike, no logs ingested, logging-stack errors
+```
+
+The index template now maps the dashboard fields as keyword. It applies from the next daily index, so
+the dashboards are most useful once a fresh index has been created.
 
 ## Cleanup
 

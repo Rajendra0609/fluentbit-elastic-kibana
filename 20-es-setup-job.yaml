@@ -5,7 +5,9 @@
 #   1. sets the kibana_system password Kibana logs in with
 #   2. creates a least-privilege role and user for Fluentd (write to k8s-logs-* only)
 #   3. creates an ILM policy that deletes indices after 7 days
-#   4. creates an index template that applies the policy to every k8s-logs-* index
+#   4. creates an index template that applies the policy to every k8s-logs-* index, and maps
+#      the fields the Kibana dashboards aggregate on (namespace, pod, container, level) as keyword.
+#      The template applies only to indices created after it, so it takes effect at the next daily index.
 #
 # Every step is an idempotent PUT or POST, so re-running the Job is safe. A Job's pod
 # template cannot be changed in place, so deploy.sh deletes the old Job before applying.
@@ -74,6 +76,22 @@ data:
           "number_of_replicas": 0,
           "refresh_interval": "1s",
           "index.lifecycle.name": "k8s-logs-retention"
+        },
+        "mappings": {
+          "properties": {
+            "level":       {"type": "keyword", "ignore_above": 256},
+            "stream":      {"type": "keyword"},
+            "cluster":     {"type": "keyword"},
+            "environment": {"type": "keyword"},
+            "kubernetes": {
+              "properties": {
+                "namespace_name": {"type": "keyword"},
+                "pod_name":       {"type": "keyword"},
+                "container_name": {"type": "keyword"},
+                "host":           {"type": "keyword"}
+              }
+            }
+          }
         }
       }
     }' >/dev/null
