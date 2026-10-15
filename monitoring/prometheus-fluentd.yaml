@@ -1,0 +1,39 @@
+# Monitoring integration for the EXISTING Prometheus in your prod-observability repo.
+# This is not part of the logging kustomization. Copy the pieces below into:
+#   - scrape_configs in argocd/apps/20-configmap.yaml   (prometheus.yml)
+#   - a new group in argocd/apps/20-alert-rules-configmap.yaml   (alerts.yml)
+#
+# Fluentd exposes its own pipeline metrics on port 24231 at /metrics:
+#   fluentd_output_status_emit_records   records handed to the Elasticsearch output
+#   fluentd_output_status_num_errors     failed sends (this is what the alert watches)
+#   fluentd_output_status_retry_count    retries; a rising count means delivery is struggling
+---
+# 1) scrape job (prometheus.yml)
+- job_name: fluentd
+  metrics_path: /metrics
+  kubernetes_sd_configs:
+    - role: pod
+  relabel_configs:
+    - source_labels: [__meta_kubernetes_namespace]
+      action: keep
+      regex: logging
+    - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+      action: keep
+      regex: fluentd
+    - source_labels: [__meta_kubernetes_pod_container_port_name]
+      action: keep
+      regex: http-metrics
+---
+# 2) alert rule group (alerts.yml). Logs silently lost is serious, so this is critical
+#    and therefore also goes to email, through your existing critical-notifications receiver.
+groups:
+  - name: logging-alerts
+    rules:
+      - alert: FluentdOutputErrors
+        expr: sum by (instance) (rate(fluentd_output_status_num_errors[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fluentd cannot deliver logs to Elasticsearch on {{ $labels.instance }}"
+          description: "Fluentd is failing to send logs to Elasticsearch. Check the fluentd and elasticsearch pods. Buffered logs on disk are resent when delivery recovers."

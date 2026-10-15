@@ -1,4 +1,8 @@
-# Elasticsearch 8.x, single node, security enabled.
+# Elasticsearch 9.5.5, single node, security enabled.
+#
+# The version must match Kibana (also 9.5.5). A data volume written by 8.x cannot be opened
+# by 9.x, so an existing 8.x install needs a fresh volume. See README, "Upgrading from the
+# Fluent Bit version".
 #
 # Lab trade-offs (see README "Production differences"):
 #   - single-node discovery, so no cluster formation and replicas = 0
@@ -27,7 +31,7 @@ spec:
       port: 9300
       targetPort: 9300
 ---
-# Stable DNS name used by Kibana, Fluent Bit and the setup Job:
+# Stable DNS name used by Kibana, Fluentd and the setup Job:
 #   elasticsearch.logging.svc.cluster.local:9200
 apiVersion: v1
 kind: Service
@@ -69,7 +73,7 @@ spec:
         fsGroup: 1000
       containers:
         - name: elasticsearch
-          image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
+          image: docker.elastic.co/elasticsearch/elasticsearch:9.5.5
           ports:
             - name: http
               containerPort: 9200

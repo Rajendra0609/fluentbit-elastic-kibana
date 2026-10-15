@@ -8,7 +8,14 @@ resources:
   - 10-elasticsearch.yaml
   - 20-es-setup-job.yaml
   - 30-kibana.yaml
-  - 40-fluent-bit-rbac.yaml
-  - 41-fluent-bit-config.yaml
-  - 42-fluent-bit-daemonset.yaml
+  - 40-fluentd-rbac.yaml
+  - 41-fluentd-config.yaml
+  - 42-fluentd-daemonset.yaml
   - 50-log-generator.yaml
+
+# The Fluentd image is built from ./image (see image/build.sh). If you push it to a
+# registry, set newName to the registry path, for example registry.example.com/lab/fluentd-logging.
+images:
+  - name: fluentd-logging
+    newName: fluentd-logging
+    newTag: "1.19.4"

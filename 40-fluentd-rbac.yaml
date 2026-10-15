@@ -1,19 +1,19 @@
-# Fluent Bit's kubernetes filter calls the API server to attach pod metadata
+# Fluentd's kubernetes_metadata filter calls the API server to attach pod metadata
 # (namespace, pod name, labels) to every log line. It needs read-only access.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: fluent-bit
+  name: fluentd
   namespace: logging
   labels:
-    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/name: fluentd
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: fluent-bit
+  name: fluentd
   labels:
-    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/name: fluentd
 rules:
   - apiGroups: [""]
     resources: ["pods", "namespaces"]
@@ -22,14 +22,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: fluent-bit
+  name: fluentd
   labels:
-    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/name: fluentd
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: fluent-bit
+  name: fluentd
 subjects:
   - kind: ServiceAccount
-    name: fluent-bit
+    name: fluentd
     namespace: logging

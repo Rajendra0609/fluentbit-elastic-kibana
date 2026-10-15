@@ -1,16 +1,19 @@
-# Fluent Bit runs as a DaemonSet, so exactly one agent runs on every node and reads
-# that node's container logs. This is the standard pattern for node-level collection.
+# Fluentd runs as a DaemonSet, so exactly one agent runs on every node and reads that
+# node's container logs. This is the standard pattern for node-level collection.
+#
+# The image is built from ../image (README, step 0). The official Fluentd DaemonSet images
+# bundle an Elasticsearch plugin for version 8 only, so this stack uses its own image.
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: fluent-bit
+  name: fluentd
   namespace: logging
   labels:
-    app.kubernetes.io/name: fluent-bit
+    app.kubernetes.io/name: fluentd
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: fluent-bit
+      app.kubernetes.io/name: fluentd
   updateStrategy:
     type: RollingUpdate
     rollingUpdate:
@@ -18,12 +21,13 @@ spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: fluent-bit
+        app.kubernetes.io/name: fluentd
       annotations:
-        # Changes to the config trigger a rolling restart when the ConfigMap is re-applied.
-        checksum/config-hash: "fluent-bit-config-v1"
+        # Kubernetes does not restart pods when a ConfigMap changes. Bump this value when
+        # you change 41-fluentd-config.yaml, so the pod template changes and pods roll.
+        checksum/config-hash: "fluentd-config-v1"
     spec:
-      serviceAccountName: fluent-bit
+      serviceAccountName: fluentd
       # Collect logs from control-plane nodes too. Single-node labs have only that node.
       tolerations:
         - key: node-role.kubernetes.io/control-plane
@@ -36,32 +40,34 @@ spec:
       securityContext:
         runAsUser: 0
       containers:
-        - name: fluent-bit
-          image: fluent/fluent-bit:3.1.9
+        - name: fluentd
+          image: fluentd-logging:1.19.4
           imagePullPolicy: IfNotPresent
           ports:
             - name: http-metrics
-              containerPort: 2020
+              containerPort: 24231
           env:
-            - name: FLUENT_BIT_ES_USER
-              value: fluent-bit
-            - name: FLUENT_BIT_ES_PASSWORD
+            - name: FLUENTD_ES_USER
+              value: fluentd
+            - name: FLUENTD_ES_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: logging-credentials
-                  key: FLUENT_BIT_PASSWORD
+                  key: FLUENTD_PASSWORD
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
+              memory: 192Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              # Fluentd is a Ruby process and needs more memory than Fluent Bit did (512Mi).
+              # Raise this if the pod is OOMKilled under heavy log volume.
+              memory: 768Mi
           livenessProbe:
             httpGet:
-              path: /api/v1/health
-              port: 2020
-            initialDelaySeconds: 10
+              path: /metrics
+              port: 24231
+            initialDelaySeconds: 20
             periodSeconds: 30
           securityContext:
             allowPrivilegeEscalation: false
@@ -72,20 +78,20 @@ spec:
               mountPath: /var/log
               readOnly: true
             - name: config
-              mountPath: /fluent-bit/etc/
+              mountPath: /fluentd/etc/
               readOnly: true
             - name: state
-              mountPath: /var/lib/fluent-bit
+              mountPath: /var/lib/fluentd
       volumes:
         - name: varlog
           hostPath:
             path: /var/log
         - name: config
           configMap:
-            name: fluent-bit-config
-        # Position database and disk buffer. They live on the host, so a pod restart
-        # resumes where it stopped and does not lose buffered logs.
+            name: fluentd-config
+        # Position file and disk buffer. They live on the host, so a pod restart resumes
+        # where it stopped and does not lose buffered logs.
         - name: state
           hostPath:
-            path: /var/lib/fluent-bit
+            path: /var/lib/fluentd
             type: DirectoryOrCreate

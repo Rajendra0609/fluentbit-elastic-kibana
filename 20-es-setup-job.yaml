@@ -3,12 +3,13 @@
 # This Job does what a production team normally does with Terraform or an Ansible
 # playbook. It:
 #   1. sets the kibana_system password Kibana logs in with
-#   2. creates a least-privilege role and user for Fluent Bit (write to k8s-logs-* only)
+#   2. creates a least-privilege role and user for Fluentd (write to k8s-logs-* only)
 #   3. creates an ILM policy that deletes indices after 7 days
 #   4. creates an index template that applies the policy to every k8s-logs-* index
 #
-# The Job is idempotent, so re-running it is safe. To re-run it, delete it first:
-#   kubectl -n logging delete job es-setup
+# Every step is an idempotent PUT or POST, so re-running the Job is safe. A Job's pod
+# template cannot be changed in place, so deploy.sh deletes the old Job before applying.
+# To re-run it by hand: kubectl -n logging delete job es-setup && kubectl apply -k .
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -45,8 +46,8 @@ data:
     api POST "/_security/user/kibana_system/_password" \
       "{\"password\":\"${KIBANA_SYSTEM_PASSWORD}\"}" >/dev/null
 
-    echo "==> creating role fluent-bit-writer (write access to k8s-logs-* only)"
-    api PUT "/_security/role/fluent-bit-writer" '{
+    echo "==> creating role fluentd-writer (write access to k8s-logs-* only)"
+    api PUT "/_security/role/fluentd-writer" '{
       "cluster": ["monitor"],
       "indices": [{
         "names": ["k8s-logs-*"],
@@ -54,9 +55,9 @@ data:
       }]
     }' >/dev/null
 
-    echo "==> creating user fluent-bit"
-    api PUT "/_security/user/fluent-bit" \
-      "{\"password\":\"${FLUENT_BIT_PASSWORD}\",\"roles\":[\"fluent-bit-writer\"],\"full_name\":\"Fluent Bit log collector\"}" >/dev/null
+    echo "==> creating user fluentd"
+    api PUT "/_security/user/fluentd" \
+      "{\"password\":\"${FLUENTD_PASSWORD}\",\"roles\":[\"fluentd-writer\"],\"full_name\":\"Fluentd log collector\"}" >/dev/null
 
     echo "==> creating ILM policy k8s-logs-retention (delete after 7 days)"
     api PUT "/_ilm/policy/k8s-logs-retention" '{
@@ -105,11 +106,11 @@ spec:
                 secretKeyRef:
                   name: logging-credentials
                   key: KIBANA_SYSTEM_PASSWORD
-            - name: FLUENT_BIT_PASSWORD
+            - name: FLUENTD_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: logging-credentials
-                  key: FLUENT_BIT_PASSWORD
+                  key: FLUENTD_PASSWORD
           volumeMounts:
             - name: script
               mountPath: /scripts

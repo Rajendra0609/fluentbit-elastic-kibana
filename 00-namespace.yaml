@@ -1,6 +1,6 @@
 # Namespace for the logging stack.
-# Fluent Bit mounts host paths (/var/log), which the "baseline" and "restricted"
-# Pod Security levels forbid, so this namespace uses "privileged". Keep log
+# Fluentd mounts host paths (/var/log and /var/lib/fluentd), which the "baseline" and
+# "restricted" Pod Security levels forbid, so this namespace uses "privileged". Keep log
 # collection isolated in this namespace and do not run application workloads here.
 apiVersion: v1
 kind: Namespace

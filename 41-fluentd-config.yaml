@@ -1,0 +1,170 @@
+# Fluentd pipeline:  SOURCE (tail) -> FILTER (kubernetes_metadata, record_transformer) -> OUTPUT (elasticsearch)
+#
+# Every stage is commented. Fluentd reads this file on startup. After a change, bump
+# checksum/config-hash in 42-fluentd-daemonset.yaml, re-apply, and run:
+#   kubectl -n logging rollout restart daemonset/fluentd
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluentd-config
+  namespace: logging
+  labels:
+    app.kubernetes.io/name: fluentd
+data:
+  fluent.conf: |
+    # Process-wide settings.
+    <system>
+      log_level info
+      # Plugin working files live on the host, so they survive pod restarts.
+      root_dir /var/lib/fluentd/root
+    </system>
+
+    # ---------------------------------------------------------------------------
+    # METRICS: Prometheus endpoint on port 24231 (path /metrics).
+    # bind 0.0.0.0 is set explicitly. Fluentd 1.19.3 changed some defaults to
+    # 127.0.0.1, and Prometheus must reach this port from outside the pod.
+    # ---------------------------------------------------------------------------
+    <source>
+      @type prometheus
+      @id in_prometheus
+      bind 0.0.0.0
+      port 24231
+      metrics_path /metrics
+    </source>
+
+    <source>
+      @type prometheus_monitor
+      @id in_prometheus_monitor
+      <labels>
+        host ${hostname}
+      </labels>
+    </source>
+
+    <source>
+      @type prometheus_output_monitor
+      @id in_prometheus_output_monitor
+      <labels>
+        host ${hostname}
+      </labels>
+    </source>
+
+    # ---------------------------------------------------------------------------
+    # INPUT: read every container log file on this node.
+    # Kubernetes writes each container's stdout/stderr to
+    # /var/log/containers/<pod>_<namespace>_<container>-<id>.log, a symlink into
+    # /var/log/pods. The /var/log mount in the DaemonSet covers both.
+    # Two line formats are handled: Docker JSON (older runtimes) and containerd CRI.
+    # ---------------------------------------------------------------------------
+    <source>
+      @type tail
+      @id in_tail_container_logs
+      path /var/log/containers/*.log
+      # Do not collect Fluentd's own logs. Otherwise it reads what it writes, which
+      # creates a feedback loop.
+      exclude_path ["/var/log/containers/*_logging_fluentd-*.log"]
+      # Tag becomes kubernetes.var.log.containers.<file>, which kubernetes_metadata parses.
+      tag kubernetes.*
+      read_from_head true
+      # Container log rotation renames files. Following the inode means rotated lines are
+      # neither lost nor read twice.
+      follow_inodes true
+      refresh_interval 5
+      # Position file, the Fluentd equivalent of Fluent Bit's tail.db. It lives on the
+      # host, so a pod restart resumes at the same byte offset.
+      pos_file /var/lib/fluentd/containers.log.pos
+      pos_file_compaction_interval 24h
+      <parse>
+        @type multi_format
+        # Docker JSON file format: one JSON object per line.
+        <pattern>
+          format json
+          time_key time
+          time_format %Y-%m-%dT%H:%M:%S.%NZ
+        </pattern>
+        # containerd CRI format: <time> <stdout|stderr> <F|P> <message>
+        # P marks a partial line; see README "Known differences" for how it is handled.
+        <pattern>
+          format regexp
+          expression /^(?<time>[^ ]+) (?<stream>stdout|stderr) (?<logtag>[FP]) (?<log>.*)$/
+          time_format %Y-%m-%dT%H:%M:%S.%N%:z
+        </pattern>
+      </parse>
+    </source>
+
+    # ---------------------------------------------------------------------------
+    # FILTER 1: Kubernetes metadata (namespace, pod, container, labels).
+    # merge_json_log lifts fields from JSON application logs (level, msg, order_id, ...)
+    # to the top level, so you can search them directly. preserve_json_log false drops
+    # the raw JSON string after merging, as Keep_Log Off did in the Fluent Bit version.
+    # de_dot turns label names such as app.kubernetes.io/name into app_kubernetes_io/name.
+    # Non-JSON lines keep their text in the "log" field.
+    # ---------------------------------------------------------------------------
+    <filter kubernetes.**>
+      @type kubernetes_metadata
+      @id filter_kube_metadata
+      de_dot true
+      merge_json_log true
+      preserve_json_log false
+    </filter>
+
+    # ---------------------------------------------------------------------------
+    # FILTER 2: stamp every record with the cluster it came from. This matters once
+    # more than one cluster sends logs to the same Elasticsearch.
+    # ---------------------------------------------------------------------------
+    <filter kubernetes.**>
+      @type record_transformer
+      @id filter_cluster_tags
+      <record>
+        cluster home-lab
+        environment lab
+      </record>
+    </filter>
+
+    # ---------------------------------------------------------------------------
+    # OUTPUT: send to Elasticsearch as daily indices, k8s-logs-YYYY.MM.DD.
+    # The output uses the Elasticsearch 9 client, which sends no document types, so
+    # there is no type name to suppress.
+    # ---------------------------------------------------------------------------
+    <match kubernetes.**>
+      @type elasticsearch
+      @id out_es_k8s_logs
+      host elasticsearch.logging.svc.cluster.local
+      port 9200
+      scheme http
+      user "#{ENV['FLUENTD_ES_USER']}"
+      password "#{ENV['FLUENTD_ES_PASSWORD']}"
+      logstash_format true
+      logstash_prefix k8s-logs
+      logstash_dateformat %Y.%m.%d
+      # Writes @timestamp from the event time. Kibana uses this field as the time field.
+      include_timestamp true
+      # Print Elasticsearch's reason when it rejects a document, such as a mapping conflict.
+      log_es_400_reason true
+      reconnect_on_error true
+      reload_on_failure true
+      request_timeout 30s
+      <buffer>
+        @type file
+        path /var/lib/fluentd/buffer/es
+        flush_mode interval
+        flush_interval 5s
+        flush_thread_count 2
+        chunk_limit_size 8MB
+        # Cap the on-disk buffer. When it is full, the oldest chunks are dropped first,
+        # which protects the node's disk.
+        total_limit_size 1GB
+        overflow_action drop_oldest_chunk
+        # Keep retrying while Elasticsearch is down, with backoff, so logs wait on disk
+        # and are sent once it recovers.
+        retry_type exponential_backoff
+        retry_wait 1s
+        retry_max_interval 60s
+        retry_forever true
+      </buffer>
+    </match>
+
+    # ---------------------------------------------------------------------------
+    # To parse a plain-text application (not JSON), add a <filter> with @type parser,
+    # key_name log, reserve_data true, and a regexp <parse> for that application's tag.
+    # The Fluent Bit version had a parsers.conf for this. Fluentd keeps it inline.
+    # ---------------------------------------------------------------------------
